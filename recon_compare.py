@@ -8,14 +8,6 @@ Script to compare two reconstructed images using SSIM (Structural Similarity Ind
 The goal is to evaluate the reconstruction done using Mark's method against Siemen's reconstruction.
 '''
 
-def compute_sharpness(image):
-    dy = (image[2:, :, :] - image[:-2, :, :]) ** 2
-    dx = (image[:, 2:, :] - image[:, :-2, :]) ** 2
-    dz = (image[:, :, 2:] - image[:, :, :-2]) ** 2
-
-    sharpness = np.mean(dy) + np.mean(dx) + np.mean(dz)
-    return sharpness
-
 def main(siemens_path, marks_path):
     #load nifti images
     if not os.path.exists(siemens_path):
@@ -65,18 +57,12 @@ def main(siemens_path, marks_path):
     # Compute SSIM
     ssim_value = ssim(mark, siemens, data_range=1.0, channel_axis=None)
 
-    # Compute sharpness
-    mark_sharpness = compute_sharpness(mark)
-    siemens_sharpness = compute_sharpness(siemens)
-
     # Print results
     print(f"RMSE: {rmse:.4f}")
     print(f"PSNR: {psnr:.4f} dB")
     print(f"SSIM: {ssim_value:.4f}")
-    print(f"Mark's Sharpness: {mark_sharpness:.4f}")
-    print(f"Siemens Sharpness: {siemens_sharpness:.4f}")
 
-    return rmse, psnr, ssim_value, mark_sharpness, siemens_sharpness
+    return rmse, psnr, ssim_value
 
 if __name__ == "__main__":
     siemens_path = "path_to_siemens_image.nii"  # Replace with actual path
