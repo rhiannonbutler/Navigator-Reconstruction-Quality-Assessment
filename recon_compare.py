@@ -55,7 +55,7 @@ def main(siemens_path, marks_path):
         psnr = 20 * np.log10(1.0 / np.sqrt(mse))
     
     # Compute SSIM
-    ssim_value = ssim(mark, siemens, data_range=1.0, channel_axis=None)
+    ssim_value = ssim(mark, siemens, data_range=1.0, channel_axis=-1)
 
     # Print results
     print(f"RMSE: {rmse:.4f}")
