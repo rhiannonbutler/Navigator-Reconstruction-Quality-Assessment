@@ -140,7 +140,8 @@ def otsu_threshold(data: np.ndarray, nbins: int = 256) -> float:
 
 def compare_niftis(path_a: str | Path, path_b: str | Path, output: str | Path | None = None,
                    slice_index: int | None = None, iterate_all_slices: bool = False,
-                   slice_tol: float = 1e-3, save_normalized: bool = True) -> list[Path]:
+                   slice_tol: float = 1e-3, save_normalized: bool = True,
+                   low_pct: float = 2.0, high_pct: float = 98.0) -> list[Path]:
     data_a, affine_a = load_nifti(path_a)
     data_b, affine_b = load_nifti(path_b)
     print("runnng spinalcord_gre-main compare_two_niftis.py")
@@ -172,18 +173,34 @@ def compare_niftis(path_a: str | Path, path_b: str | Path, output: str | Path | 
     tissue_mask_a = data_a > threshold_a
     tissue_mask_b = data_b > threshold_b
 
-    # 2. Extract median structural values to calculate a clean global matching scaling factor
-    median_a = np.median(data_a[tissue_mask_a]) if np.any(tissue_mask_a) else 1.0
-    median_b = np.median(data_b[tissue_mask_b]) if np.any(tissue_mask_b) else 1.0
-    if median_a == 0:
-        median_a = 1.0
+    # 2. Anchor a low and high percentile of each volume's tissue distribution.
+    #    A single-point match (e.g. just the median) only corrects *gain* around
+    #    that one point -- it leaves any *offset*/bias, or a difference in overall
+    #    dynamic range, uncorrected, which is why one image can still look
+    #    noticeably brighter or dimmer than the other even after matching.
+    #    Anchoring two points (low_pct, high_pct) lets us solve for both a scale
+    #    and an offset, i.e. a full affine match: a_matched = a*scale + offset.
+    lo_a = np.percentile(data_a[tissue_mask_a], low_pct) if np.any(tissue_mask_a) else 0.0
+    hi_a = np.percentile(data_a[tissue_mask_a], high_pct) if np.any(tissue_mask_a) else 1.0
+    lo_b = np.percentile(data_b[tissue_mask_b], low_pct) if np.any(tissue_mask_b) else 0.0
+    hi_b = np.percentile(data_b[tissue_mask_b], high_pct) if np.any(tissue_mask_b) else 1.0
+    if hi_a <= lo_a:
+        hi_a = lo_a + 1.0
+    if hi_b <= lo_b:
+        hi_b = lo_b + 1.0
 
-    # 3. Match global structural gain of A directly to the standard baseline volume B
-    data_a_matched = data_a * (median_b / median_a)
+    # 3. Solve the affine map that sends [lo_a, hi_a] -> [lo_b, hi_b], then apply
+    #    it to the whole of A. This matches both brightness level and contrast
+    #    range of A to B, not just a single scalar gain.
+    scale = (hi_b - lo_b) / (hi_a - lo_a)
+    offset = lo_b - lo_a * scale
+    data_a_matched = data_a * scale + offset
 
-    # 4. Use the 98th percentile of Master Image B's tissue to set the peak window cap
-    # (98th percentile cuts out artifact noise spikes that blow up 99/100 thresholds)
-    vmax_reference = np.percentile(data_b[tissue_mask_b], 98.0) if np.any(tissue_mask_b) else 1.0
+    # 4. Use B's high-percentile anchor as the shared display peak window cap
+    # (98th percentile cuts out artifact noise spikes that blow up 99/100 thresholds).
+    # Both A and B are now on the same intensity scale by construction, so a single
+    # shared vmax_reference is meaningful for both.
+    vmax_reference = hi_b
     if vmax_reference <= 0:
         vmax_reference = 1.0
 
@@ -251,11 +268,11 @@ def compare_niftis(path_a: str | Path, path_b: str | Path, output: str | Path | 
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
         im0 = axes[0].imshow(a_norm.T, cmap="gray", origin="lower", vmin=0.0, vmax=1.0)
-        axes[0].set_title(f"Mark's Recon - {z_text}")
+        axes[0].set_title(f"Recon A (Matched Baseline) - {z_text}")
         axes[0].axis("off")
 
         im1 = axes[1].imshow(b_norm.T, cmap="gray", origin="lower", vmin=0.0, vmax=1.0)
-        axes[1].set_title(f"Siemen's Recon - {z_text}")
+        axes[1].set_title(f"Recon B (Original) - {z_text}")
         axes[1].axis("off")
 
         # Signed structural divergence plot using Blue-White-Red scheme
@@ -295,6 +312,11 @@ if __name__ == "__main__":
                          help="Tolerance (mm) for matching slice z-positions between A and B.")
     parser.add_argument("--no-save-normalized", action="store_true",
                          help="Skip saving the full normalized/cropped .nii.gz volumes, only produce PNG panels.")
+    parser.add_argument("--low-percentile", type=float, default=2.0,
+                         help="Low percentile of each volume's tissue used as the brightness-matching anchor (default: 2).")
+    parser.add_argument("--high-percentile", type=float, default=99.0,
+                         help="High percentile of each volume's tissue used as the brightness-matching anchor "
+                              "and display peak (default: 98).")
     args = parser.parse_args()
     compare_niftis(
         args.img_a,
@@ -304,4 +326,6 @@ if __name__ == "__main__":
         iterate_all_slices=args.all_slices,
         slice_tol=args.slice_tol,
         save_normalized=not args.no_save_normalized,
+        low_pct=args.low_percentile,
+        high_pct=args.high_percentile,
     )
